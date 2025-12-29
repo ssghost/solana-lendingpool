@@ -52,7 +52,7 @@ pub struct InitBank<'info> {
     #[account(
         init,                   
         payer = signer,         
-        space = 8 + 32 + 8 + 8, 
+        space = 8 + Bank::INIT_SPACE,
         seeds = [b"bank", mint.key().as_ref()],      
         bump                    
     )]
@@ -73,8 +73,7 @@ pub struct InitBank<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
     pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-    pub rent: Sysvar<'info, Rent>
+    pub token_program: Program<'info, Token>
 }
 
 #[derive(Accounts)]
@@ -143,5 +142,5 @@ pub struct UserAccount {
 }
 
 impl UserAccount {
-    pub const INIT_SPACE: usize = 32 + 8 + 8;
+    pub const INIT_SPACE: usize = 32 + 8 + 8 + 1;
 }
