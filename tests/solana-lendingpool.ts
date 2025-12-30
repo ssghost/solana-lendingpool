@@ -49,7 +49,7 @@ describe("solana_lendingpool", () => {
       provider.wallet.publicKey,
       initialBalance
     );
-    console.log("Minted 1000 USDC to User");
+    console.log("Minted 1000 USDC to User.");
   });
 
   it("Initialize Bank", async () => {
@@ -76,7 +76,7 @@ describe("solana_lendingpool", () => {
       })
       .rpc();
     
-    console.log("Bank Initialized!");
+    console.log("Bank Initialized.");
   });
 
   it("Deposit USDC", async () => {
@@ -100,7 +100,7 @@ describe("solana_lendingpool", () => {
       })
       .rpc();
 
-    console.log("Deposit 100 USDC successful!");
+    console.log("Deposit 100 USDC submitted, verifying state...");
 
     const bankTokenBalance = await provider.connection.getTokenAccountBalance(bankTokenAccount);
     assert.equal(bankTokenBalance.value.amount, depositAmount.toString());
