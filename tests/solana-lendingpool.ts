@@ -88,9 +88,9 @@ describe("solana_lendingpool", () => {
     await program.methods
       .deposit(depositAmount)
       .accounts({
-        signer: provider.wallet.publicKey,
         // @ts-ignore
         bank: bankPda,
+        signer: provider.wallet.publicKey,
         bankTokenAccount: bankTokenAccount,
         mint: mint,
         userTokenAccount: userTokenAccount,
@@ -150,5 +150,41 @@ describe("solana_lendingpool", () => {
     const userState = await program.account.userAccount.fetch(userAccountPda);
     assert.ok(userState.borrowedAmount.eq(borrowAmount)); 
     console.log("User state verified: Borrowed Amount = 500");
+  });
+
+  it("Repay USDC", async () => {
+    const repayAmount = new anchor.BN(200);
+
+    await program.methods
+      .repay(repayAmount)
+      .accounts({
+        // @ts-ignore
+        bank: bankPda,
+        userAccount: userAccountPda,
+        bankTokenAccount: bankTokenAccount,
+        mint: mint,
+        userTokenAccount: userTokenAccount,
+        signer: provider.wallet.publicKey,
+        tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    console.log("Repay transaction submitted, verifying state...");
+
+    const bankTokenBalance = await provider.connection.getTokenAccountBalance(bankTokenAccount);
+    assert.equal(bankTokenBalance.value.amount, "99999700");
+    console.log("Bank vault balance verified: 99,999,700");
+
+    const userTokenBalance = await provider.connection.getTokenAccountBalance(userTokenAccount);
+    assert.equal(userTokenBalance.value.amount, "900000300");
+    console.log("User wallet balance verified: 900,000,300");
+
+    const userState = await program.account.userAccount.fetch(userAccountPda);
+    assert.ok(userState.borrowedAmount.eq(new anchor.BN(300)));
+    console.log("User state verified: Remaining Debt = 300");
+
+    const bankState = await program.account.bank.fetch(bankPda);
+    assert.ok(bankState.totalBorrowed.eq(new anchor.BN(300)));
+    console.log("Bank state verified: Total Borrowed = 300");
   });
 });

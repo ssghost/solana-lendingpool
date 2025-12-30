@@ -84,6 +84,30 @@ pub mod solana_lendingpool {
         msg!("Borrowed: {}", amount);
         Ok(())
     }
+
+    pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
+        let user_account = &mut ctx.accounts.user_account;
+        let bank = &mut ctx.accounts.bank;
+
+        if amount > user_account.borrowed_amount {
+            return err!(ErrorCode::OverRepay);
+        }
+
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.user_token_account.to_account_info(),
+            to: ctx.accounts.bank_token_account.to_account_info(),
+            authority: ctx.accounts.signer.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        
+        token::transfer(cpi_ctx, amount)?;
+        user_account.borrowed_amount -= amount;
+        bank.total_borrowed -= amount;
+
+        msg!("Repaid successfully: {}", amount);
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -157,33 +181,6 @@ pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[account]
-pub struct Bank {
-    pub authority: Pubkey,
-    pub total_deposits: u64, 
-    pub total_borrowed: u64, 
-    pub mint: Pubkey,
-    pub bank_token_account: Pubkey,
-    pub liquidation_threshold: u64, 
-    pub max_ltv: u64
-}
-
-impl Bank {
-    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8;
-}
-
-#[account]
-pub struct UserAccount {
-    pub owner: Pubkey,
-    pub deposit_amount: u64,
-    pub borrowed_amount: u64,
-    pub bump: u8,
-}
-
-impl UserAccount {
-    pub const INIT_SPACE: usize = 32 + 8 + 8 + 1;
-}
-
 #[derive(Accounts)]
 pub struct Borrow<'info> {
     #[account(
@@ -222,10 +219,80 @@ pub struct Borrow<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct Repay<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"bank", mint.key().as_ref()],
+        bump
+    )]
+    pub bank: Account<'info, Bank>,
+
+    #[account(
+        mut,
+        seeds = [b"treasury", mint.key().as_ref()],
+        bump
+    )]
+    pub bank_token_account: Account<'info, TokenAccount>, 
+
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = user_token_account.owner == signer.key(),
+        constraint = user_token_account.mint == mint.key()
+    )]
+    pub user_token_account: Account<'info, TokenAccount>, 
+
+    #[account(
+        mut,
+        seeds = [b"user", signer.key().as_ref()],
+        bump
+    )]
+    pub user_account: Account<'info, UserAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[account]
+pub struct Bank {
+    pub authority: Pubkey,
+    pub total_deposits: u64, 
+    pub total_borrowed: u64, 
+    pub mint: Pubkey,
+    pub bank_token_account: Pubkey,
+    pub liquidation_threshold: u64, 
+    pub max_ltv: u64,
+    pub interest_rate: u64, 
+    pub last_updated: i64,
+}
+
+impl Bank {
+    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8;
+}
+
+#[account]
+pub struct UserAccount {
+    pub owner: Pubkey,
+    pub deposit_amount: u64,
+    pub borrowed_amount: u64,
+    pub bump: u8,
+}
+
+impl UserAccount {
+    pub const INIT_SPACE: usize = 32 + 8 + 8 + 1;
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("User does not have enough collateral to borrow this amount.")]
     OverLTV,
     #[msg("Bank does not have enough funds.")]
     InsufficientFunds,
+    #[msg("Repayment amount exceeds borrowed amount.")]
+    OverRepay,
 }
