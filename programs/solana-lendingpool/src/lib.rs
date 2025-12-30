@@ -7,7 +7,7 @@ declare_id!("Bkkm6zdAUkacHwn5ZiwFjJRSomnbhnszg7UTDf32Dqg4");
 pub mod solana_lendingpool {
     use super::*;
 
-    pub fn init_bank(ctx: Context<InitBank>, liquidation_threshold: u64, max_ltv: u64) -> Result<()> {
+    pub fn init_bank(ctx: Context<InitBank>, liquidation_threshold: u64, max_ltv: u64, interest_rate: u64) -> Result<()> {
         let bank = &mut ctx.accounts.bank;
 
         bank.authority = ctx.accounts.signer.key(); 
@@ -18,6 +18,10 @@ pub mod solana_lendingpool {
         bank.total_borrowed = 0;
         bank.liquidation_threshold = liquidation_threshold; 
         bank.max_ltv = max_ltv;
+
+        bank.interest_rate = interest_rate;
+        let clock = Clock::get()?; 
+        bank.last_updated = clock.unix_timestamp;
 
         msg!("Bank initialized! Authority: {}", bank.authority);
         Ok(())
@@ -33,7 +37,8 @@ pub mod solana_lendingpool {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-        
+
+        bank.process_interest()?;
         token::transfer(cpi_ctx, amount)?;
         bank.total_deposits += amount;
         user_account.deposit_amount += amount;
@@ -50,7 +55,8 @@ pub mod solana_lendingpool {
         let bank = &mut ctx.accounts.bank;
         let user_account = &mut ctx.accounts.user_account;
         let max_borrowable = (user_account.deposit_amount * bank.max_ltv) / 100;
-        
+
+        bank.process_interest()?;        
         if user_account.borrowed_amount + amount > max_borrowable {
              return err!(ErrorCode::OverLTV);
         }
@@ -89,6 +95,7 @@ pub mod solana_lendingpool {
         let user_account = &mut ctx.accounts.user_account;
         let bank = &mut ctx.accounts.bank;
 
+        bank.process_interest()?;
         if amount > user_account.borrowed_amount {
             return err!(ErrorCode::OverRepay);
         }
@@ -272,7 +279,26 @@ pub struct Bank {
 }
 
 impl Bank {
-    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8;
+    pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 8;
+
+    pub fn process_interest(&mut self) -> Result<()> {
+        let clock = Clock::get()?;
+        let current_time = clock.unix_timestamp;
+        let time_elapsed = current_time - self.last_updated;
+
+        if time_elapsed > 0 {
+            let interest = (self.total_borrowed as u128)
+                .checked_mul(self.interest_rate as u128).unwrap()
+                .checked_mul(time_elapsed as u128).unwrap()
+                .checked_div(10000).unwrap()
+                .checked_div(31536000).unwrap();
+
+            self.total_borrowed = self.total_borrowed.checked_add(interest as u64).unwrap();
+            self.total_deposits = self.total_deposits.checked_add(interest as u64).unwrap();
+            self.last_updated = current_time;
+        }
+        Ok(())
+    }
 }
 
 #[account]

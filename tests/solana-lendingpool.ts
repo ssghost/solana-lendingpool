@@ -64,7 +64,7 @@ describe("solana_lendingpool", () => {
     );
 
     await program.methods
-      .initBank(new anchor.BN(5000), new anchor.BN(8000)) 
+      .initBank(new anchor.BN(5000), new anchor.BN(8000), new anchor.BN(500)) 
       .accounts({
         // @ts-ignore
         bank: bankPda,
