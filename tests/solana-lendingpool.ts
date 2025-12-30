@@ -114,4 +114,41 @@ describe("solana_lendingpool", () => {
     assert.ok(userState.depositAmount.eq(depositAmount));
     console.log("User deposit record verified:", userState.depositAmount.toString());
   });
+
+  it("Borrow USDC", async () => {
+    const borrowAmount = new anchor.BN(500);
+
+    await program.methods
+      .borrow(borrowAmount)
+      .accounts({
+        // @ts-ignore
+        bank: bankPda,
+        bankTokenAccount: bankTokenAccount,
+        mint: mint,
+        userTokenAccount: userTokenAccount,
+        userAccount: userAccountPda,
+        signer: provider.wallet.publicKey,
+        tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    console.log("Borrow transaction submitted, verifying state...");
+
+    const bankTokenBalance = await provider.connection.getTokenAccountBalance(bankTokenAccount);
+    assert.equal(bankTokenBalance.value.amount, "99999500"); 
+    console.log("Bank vault balance verified: 99,999,500");
+
+    const userTokenBalance = await provider.connection.getTokenAccountBalance(userTokenAccount);
+    assert.equal(userTokenBalance.value.amount, "900000500");
+    console.log("User wallet balance verified: 900,000,500");
+
+    const bankState = await program.account.bank.fetch(bankPda);
+    assert.ok(bankState.totalBorrowed.eq(borrowAmount)); 
+    assert.ok(bankState.totalDeposits.eq(new anchor.BN(100000000))); 
+    console.log("Bank state verified: Total Borrowed = 500");
+
+    const userState = await program.account.userAccount.fetch(userAccountPda);
+    assert.ok(userState.borrowedAmount.eq(borrowAmount)); 
+    console.log("User state verified: Borrowed Amount = 500");
+  });
 });
