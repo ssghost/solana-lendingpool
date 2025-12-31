@@ -1,1 +1,1 @@
-anchor test --run tests/simulate.ts
+npx ts-mocha -p ./tsconfig.json -t 1000000 tests/simulate.ts

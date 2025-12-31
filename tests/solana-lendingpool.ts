@@ -21,6 +21,10 @@ describe("solana_lendingpool", () => {
   let userTokenAccount: anchor.web3.PublicKey;
   let userAccountPda: anchor.web3.PublicKey;
 
+  const priceFeedKeypair = anchor.web3.Keypair.generate(); 
+  const liquidatorKeypair = anchor.web3.Keypair.generate(); 
+  let liquidatorTokenAccount: anchor.web3.PublicKey;
+
   const initialBalance = 1000_000_000; 
   const depositAmount = new anchor.BN(100_000_000); 
 
@@ -50,9 +54,26 @@ describe("solana_lendingpool", () => {
       initialBalance
     );
     console.log("Minted 1000 USDC to User.");
+
+    liquidatorTokenAccount = await createAssociatedTokenAccount(
+      provider.connection,
+      provider.wallet.payer,
+      mint,
+      liquidatorKeypair.publicKey
+    );
+
+    await mintTo(
+      provider.connection,
+      provider.wallet.payer,
+      mint,
+      liquidatorTokenAccount,
+      provider.wallet.publicKey, 
+      initialBalance 
+    );
+    console.log("Minted 1000 USDC to Liquidator.");
   });
 
-  it("Initialize Bank", async () => {
+  it("Initialize Bank and Oracle", async () => {
     [bankPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("bank"), mint.toBuffer()],
       program.programId
@@ -64,7 +85,7 @@ describe("solana_lendingpool", () => {
     );
 
     await program.methods
-      .initBank(new anchor.BN(5000), new anchor.BN(8000), new anchor.BN(500)) 
+      .initBank(new anchor.BN(50), new anchor.BN(80), new anchor.BN(500)) 
       .accounts({
         // @ts-ignore
         bank: bankPda,
@@ -72,11 +93,23 @@ describe("solana_lendingpool", () => {
         bankTokenAccount: bankTokenAccount,
         signer: provider.wallet.publicKey,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
+        systemProgram: anchor.web3.SystemProgram.programId
       })
       .rpc();
     
     console.log("Bank Initialized.");
+
+    await program.methods
+      .initPriceFeed(new anchor.BN(10), 6) 
+      .accounts({
+          priceFeed: priceFeedKeypair.publicKey,
+          signer: provider.wallet.publicKey,
+          // @ts-ignore
+          systemProgram: anchor.web3.SystemProgram.programId
+      })
+      .signers([priceFeedKeypair])
+      .rpc();
+    console.log("Oracle Initialized with Price: $10");
   });
 
   it("Deposit USDC", async () => {
@@ -96,7 +129,7 @@ describe("solana_lendingpool", () => {
         userTokenAccount: userTokenAccount,
         userAccount: userAccountPda,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
-        systemProgram: anchor.web3.SystemProgram.programId,
+        systemProgram: anchor.web3.SystemProgram.programId
       })
       .rpc();
 
@@ -116,7 +149,7 @@ describe("solana_lendingpool", () => {
   });
 
   it("Borrow USDC", async () => {
-    const borrowAmount = new anchor.BN(500);
+    const borrowAmount = new anchor.BN(60_000_000);
 
     await program.methods
       .borrow(borrowAmount)
@@ -129,18 +162,19 @@ describe("solana_lendingpool", () => {
         userAccount: userAccountPda,
         signer: provider.wallet.publicKey,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+        priceFeed: priceFeedKeypair.publicKey
       })
       .rpc();
 
     console.log("Borrow transaction submitted, verifying state...");
 
     const bankTokenBalance = await provider.connection.getTokenAccountBalance(bankTokenAccount);
-    assert.equal(bankTokenBalance.value.amount, "99999500"); 
-    console.log("Bank vault balance verified: 99,999,500");
+    assert.equal(bankTokenBalance.value.amount, "40000000"); 
+    console.log("Bank vault balance verified: 40,000,000");
 
     const userTokenBalance = await provider.connection.getTokenAccountBalance(userTokenAccount);
-    assert.equal(userTokenBalance.value.amount, "900000500");
-    console.log("User wallet balance verified: 900,000,500");
+    assert.equal(userTokenBalance.value.amount, "960000000");
+    console.log("User wallet balance verified: 960,000,000");
 
     const bankState = await program.account.bank.fetch(bankPda);
     assert.ok(bankState.totalBorrowed.eq(borrowAmount)); 
@@ -172,19 +206,55 @@ describe("solana_lendingpool", () => {
     console.log("Repay transaction submitted, verifying state...");
 
     const bankTokenBalance = await provider.connection.getTokenAccountBalance(bankTokenAccount);
-    assert.equal(bankTokenBalance.value.amount, "99999700");
-    console.log("Bank vault balance verified: 99,999,700");
+    assert.equal(bankTokenBalance.value.amount, "40000200");
+    console.log("Bank vault balance verified: 40,000,200");
 
     const userTokenBalance = await provider.connection.getTokenAccountBalance(userTokenAccount);
-    assert.equal(userTokenBalance.value.amount, "900000300");
-    console.log("User wallet balance verified: 900,000,300");
+    assert.equal(userTokenBalance.value.amount, "959999800");
+    console.log("User wallet balance verified: 959,999,800");
 
     const userState = await program.account.userAccount.fetch(userAccountPda);
-    assert.ok(userState.borrowedAmount.eq(new anchor.BN(300)));
-    console.log("User state verified: Remaining Debt = 300");
+    assert.ok(userState.borrowedAmount.eq(new anchor.BN(59999800)));
+    console.log("User state verified: Remaining Debt = 59,999,800");
 
     const bankState = await program.account.bank.fetch(bankPda);
-    assert.ok(bankState.totalBorrowed.eq(new anchor.BN(300)));
-    console.log("Bank state verified: Total Borrowed = 300");
+    assert.ok(bankState.totalBorrowed.eq(new anchor.BN(59999800)));
+    console.log("Bank state verified: Total Borrowed = 59,999,800");
+  });
+
+  it("Liquidate (Market Crash)", async () => {
+    console.log("Simulating Market Crash...");
+    await program.methods
+        .setPrice(new anchor.BN(1)) 
+        .accounts({
+            priceFeed: priceFeedKeypair.publicKey,
+            // @ts-ignore
+            authority: provider.wallet.publicKey,
+        })
+        .rpc();
+    console.log("Price updated to $0.1");
+
+    const liquidateAmount = new anchor.BN(5); 
+    console.log("Liquidator stepping in...");
+
+    await program.methods
+        .liquidate(liquidateAmount)
+        .accounts({
+            // @ts-ignore
+            bank: bankPda,
+            bankTokenAccount: bankTokenAccount,
+            mint: mint,
+            liquidatorTokenAccount: liquidatorTokenAccount, 
+            liquidator: liquidatorKeypair.publicKey,        
+            userTokenAccount: userTokenAccount,             
+            userAccount: userAccountPda,                    
+            user: provider.wallet.publicKey,                
+            priceFeed: priceFeedKeypair.publicKey,         
+            tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+        })
+        .signers([liquidatorKeypair]) 
+        .rpc();
+
+    console.log("Liquidation completed");
   });
 });

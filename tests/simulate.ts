@@ -16,6 +16,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
   const mintKeypair = anchor.web3.Keypair.generate();
   const user = provider.wallet;
   let userTokenAccount: anchor.web3.PublicKey;
+  const priceFeedKeypair = anchor.web3.Keypair.generate();
 
   const [bankPda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("bank"), mintKeypair.publicKey.toBuffer()],
@@ -72,7 +73,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
     }
   });
 
-  it("Initialize Protocol", async () => {
+  it("Initialize Protocol and Oracle", async () => {
     try {
       await program.methods.initBank(new anchor.BN(50), new anchor.BN(80), new anchor.BN(500))
         .accounts({
@@ -82,10 +83,21 @@ describe("DeFi Simulation (Basic Mode)", () => {
           bankTokenAccount: bankTokenAccount,
           signer: user.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: anchor.web3.SystemProgram.programId,
+          systemProgram: anchor.web3.SystemProgram.programId
         })
         .rpc();
       logSuccess("Bank Initialized (with Interest Rate)");
+
+      await program.methods.initPriceFeed(new anchor.BN(10), 6)
+        .accounts({
+            priceFeed: priceFeedKeypair.publicKey,
+            signer: user.publicKey,
+            // @ts-ignore
+            systemProgram: anchor.web3.SystemProgram.programId
+        })
+        .signers([priceFeedKeypair])
+        .rpc();
+      logSuccess("Oracle Initialized (Price: $10)");
     } catch (e) {
       log(`Bank init skipped or failed: ${e}`);
     }
@@ -105,7 +117,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
             userTokenAccount: userTokenAccount,
             userAccount: userAccountPda,
             signer: user.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID
         }).rpc();
         logSuccess("Account Opened & Initial Deposit Success");
     } catch (e) {
@@ -115,7 +127,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
     while (true) {
       counter++;
       console.log(`\n--- Block Simulation #${counter} ---`);
-      const action = Math.floor(Math.random() * 3);
+      const action = Math.floor(Math.random() * 5);
       const amount = new anchor.BN(Math.floor(Math.random() * 50) + 10); 
 
       try {
@@ -129,7 +141,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
             userTokenAccount: userTokenAccount,
             userAccount: userAccountPda,
             signer: user.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID
           }).rpc();
           logSuccess("Deposit Success");
         }
@@ -144,10 +156,11 @@ describe("DeFi Simulation (Basic Mode)", () => {
             userAccount: userAccountPda,
             signer: user.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            priceFeed: priceFeedKeypair.publicKey
           }).rpc();
           logSuccess("Borrow Success");
         }
-        else {
+        else if (action === 2){
           log(`User repaying ${amount.toString()} USDC...`);
           await program.methods.repay(amount).accounts({
             // @ts-ignore
@@ -157,14 +170,43 @@ describe("DeFi Simulation (Basic Mode)", () => {
             userAccount: userAccountPda,
             userTokenAccount: userTokenAccount,
             signer: user.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID
           }).rpc();
           logSuccess("Repay Success");
+        }
+        else if (action === 3) { 
+          const newPrice = Math.floor(Math.random() * 20); 
+          const safePrice = newPrice === 0 ? 1 : newPrice; 
+          log(`Oracle updating price to $${safePrice}...`);
+          await program.methods.setPrice(new anchor.BN(safePrice)).accounts({
+            priceFeed: priceFeedKeypair.publicKey,
+            // @ts-ignore
+            authority: user.publicKey,
+          }).rpc();
+          logSuccess(`Price Updated to $${safePrice}`);
+        }
+        else { 
+          log("Attempting Liquidation check...");
+           await program.methods.liquidate(new anchor.BN(5)).accounts({
+              // @ts-ignore
+              bank: bankPda,
+              bankTokenAccount: bankTokenAccount,
+              mint: mintKeypair.publicKey,
+              liquidatorTokenAccount: userTokenAccount,
+              liquidator: user.publicKey,
+              userTokenAccount: userTokenAccount,
+              userAccount: userAccountPda,
+              user: user.publicKey,
+              priceFeed: priceFeedKeypair.publicKey,
+              tokenProgram: TOKEN_PROGRAM_ID,
+           }).rpc();
+           logSuccess("Liquidation Executed! Collateral Seized.");
         }
         const bankState = await program.account.bank.fetch(bankPda);
         console.log(`Vault: ${bankState.totalDeposits.toString()} | Borrowed: ${bankState.totalBorrowed.toString()}`);
       } catch (e: any) {
-        if (e.message.includes("OverLTV")) logError("Rejected: Over LTV (Risk Control)");
+        if (e.message.includes("NotUndercollateralized") || e.message.includes("6004")) {console.log("Liquidation Check: Position Healthy, Liquidation Rejected");}
+        else if (e.message.includes("OverLTV")) logError("Rejected: Over LTV (Risk Control)");
         else if (e.message.includes("InsufficientFunds")) logError("Rejected: Not enough funds");
         else if (e.message.includes("OverRepay")) logError("Action Rejected: Over Repay (User tried to pay more than debt)")
         else logError(`Transaction Failed: ${e.message}`);
