@@ -1,0 +1,1 @@
+anchor test --run tests/simulate.ts
