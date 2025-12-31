@@ -222,6 +222,31 @@ describe("solana_lendingpool", () => {
     console.log("Bank state verified: Total Borrowed = 59,999,800");
   });
 
+  it("Withdraw Partial Collateral", async () => {
+    const withdrawAmount = new anchor.BN(10_000_000); 
+    console.log("Attempting to withdraw 10 USDC...");
+
+    await program.methods
+      .withdraw(withdrawAmount)
+      .accounts({
+        // @ts-ignore
+        bank: bankPda,
+        bankTokenAccount: bankTokenAccount,
+        mint: mint,
+        userTokenAccount: userTokenAccount,
+        userAccount: userAccountPda,
+        priceFeed: priceFeedKeypair.publicKey, 
+        signer: provider.wallet.publicKey,
+        tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    console.log("Withdraw transaction submitted, verifying state...");
+    
+    const userState = await program.account.userAccount.fetch(userAccountPda);
+    console.log("User remaining deposit in Bank:", userState.depositAmount.toString());
+  });
+
   it("Liquidate (Market Crash)", async () => {
     console.log("Simulating Market Crash...");
     await program.methods

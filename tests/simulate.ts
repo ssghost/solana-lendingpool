@@ -127,7 +127,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
     while (true) {
       counter++;
       console.log(`\n--- Block Simulation #${counter} ---`);
-      const action = Math.floor(Math.random() * 5);
+      const action = Math.floor(Math.random() * 6);
       const amount = new anchor.BN(Math.floor(Math.random() * 50) + 10); 
 
       try {
@@ -185,7 +185,7 @@ describe("DeFi Simulation (Basic Mode)", () => {
           }).rpc();
           logSuccess(`Price Updated to $${safePrice}`);
         }
-        else { 
+        else if (action == 4) { 
           log("Attempting Liquidation check...");
            await program.methods.liquidate(new anchor.BN(5)).accounts({
               // @ts-ignore
@@ -202,13 +202,29 @@ describe("DeFi Simulation (Basic Mode)", () => {
            }).rpc();
            logSuccess("Liquidation Executed! Collateral Seized.");
         }
+        else {
+          log(`User withdrawing ${amount.toString()} Tokens...`);
+           await program.methods.withdraw(amount).accounts({
+              // @ts-ignore
+              bank: bankPda,
+              bankTokenAccount: bankTokenAccount,
+              mint: mintKeypair.publicKey,
+              userTokenAccount: userTokenAccount,
+              userAccount: userAccountPda,
+              priceFeed: priceFeedKeypair.publicKey, 
+              signer: user.publicKey,
+              tokenProgram: TOKEN_PROGRAM_ID,
+           }).rpc();
+           logSuccess("Withdraw Success");
+        }
         const bankState = await program.account.bank.fetch(bankPda);
         console.log(`Vault: ${bankState.totalDeposits.toString()} | Borrowed: ${bankState.totalBorrowed.toString()}`);
       } catch (e: any) {
         if (e.message.includes("NotUndercollateralized") || e.message.includes("6004")) {console.log("Liquidation Check: Position Healthy, Liquidation Rejected");}
-        else if (e.message.includes("OverLTV")) logError("Rejected: Over LTV (Risk Control)");
+        else if (e.message.includes("OverLTV")) logError("Action Rejected: Over LTV (Borrow or Withdraw blocked to maintain solvency)");
         else if (e.message.includes("InsufficientFunds")) logError("Rejected: Not enough funds");
         else if (e.message.includes("OverRepay")) logError("Action Rejected: Over Repay (User tried to pay more than debt)")
+        else if (e.message.includes("0x1") || e.message.includes("insufficient funds")) logError("Action Rejected: Liquidity Crisis (Bank vault is empty)");
         else logError(`Transaction Failed: ${e.message}`);
       }
 

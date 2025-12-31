@@ -51,6 +51,61 @@ pub mod solana_lendingpool {
         Ok(())
     }
 
+    // 放在 borrow 函數附近
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let bank = &mut ctx.accounts.bank;
+        let user_account = &mut ctx.accounts.user_account;
+        
+        bank.process_interest()?;
+
+        if amount > user_account.deposit_amount {
+            return err!(ErrorCode::InsufficientFunds);
+        }
+
+        if user_account.borrowed_amount > 0 {
+            let price_feed = &ctx.accounts.price_feed;
+            let remaining_collateral = user_account.deposit_amount
+                .checked_sub(amount)
+                .ok_or(ErrorCode::MathOverflow)?;
+            let collateral_value = remaining_collateral
+                .checked_mul(price_feed.price)
+                .ok_or(ErrorCode::MathOverflow)?;
+            let max_borrow_value = collateral_value
+                .checked_mul(bank.max_ltv)
+                .ok_or(ErrorCode::MathOverflow)?
+                .checked_div(100)
+                .ok_or(ErrorCode::MathOverflow)?;
+
+            if user_account.borrowed_amount > max_borrow_value {
+                return err!(ErrorCode::OverLTV); 
+            }
+        }
+
+        let mint_key = ctx.accounts.mint.key();
+        let signer_seeds: &[&[&[u8]]] = &[
+            &[
+                b"bank",
+                mint_key.as_ref(),
+                &[ctx.bumps.bank],
+            ],
+        ];
+
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.bank_token_account.to_account_info(),
+            to: ctx.accounts.user_token_account.to_account_info(),
+            authority: bank.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+
+        token::transfer(cpi_ctx, amount)?;
+        bank.total_deposits = bank.total_deposits.checked_sub(amount).unwrap();
+        user_account.deposit_amount = user_account.deposit_amount.checked_sub(amount).unwrap();
+
+        msg!("Withdraw successful! Amount: {}", amount);
+        Ok(())
+    }
+
     pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
         let bank = &mut ctx.accounts.bank;
         let user_account = &mut ctx.accounts.user_account;
@@ -281,6 +336,45 @@ pub struct Deposit<'info> {
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        seeds = [b"bank", mint.key().as_ref()],
+        bump
+    )]
+    pub bank: Account<'info, Bank>,
+
+    #[account(
+        mut,
+        seeds = [b"treasury", mint.key().as_ref()],
+        bump
+    )]
+    pub bank_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = user_token_account.owner == signer.key(),
+        constraint = user_token_account.mint == mint.key()
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub price_feed: Account<'info, PriceFeed>, 
+
+    #[account(
+        mut,
+        seeds = [b"user", signer.key().as_ref()],
+        bump
+    )]
+    pub user_account: Account<'info, UserAccount>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
